@@ -1,4 +1,4 @@
-"""运维合同接口：维护运维合同，覆盖确认签订、开始履行、终止合同等动作。"""
+"""运维合同接口：维护运维合同，覆盖确认签订、开始履行、办理续签、终止合同等动作。"""
 from __future__ import annotations
 
 from typing import Any
@@ -13,13 +13,13 @@ router = APIRouter(prefix="/api/contract", tags=["运维合同"])
 service = ContractService()
 
 LIST_FIELDS = ["合同编号", "合同名称", "签约甲方", "签约乙方", "合同金额", "起止日期", "续签条款", "合同状态"]
-STATUSES = ["草稿中", "已签订", "履行中", "已到期", "已终止"]
+STATUSES = ["草稿中", "已签订", "履行中", "已到期", "已续签", "已终止"]
 
 
 @router.get("", response_model=PageResult[dict])
 def list_entries(
     keyword: str | None = Query(default=None, description="按合同编号检索"),
-    status: str | None = Query(default=None, description="草稿中、已签订、履行中、已到期、已终止"),
+    status: str | None = Query(default=None, description="草稿中、已签订、履行中、已到期、已续签、已终止"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
@@ -28,6 +28,21 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries(
+    keyword: str | None = Query(default=None, description="按合同编号检索"),
+    status: str | None = Query(default=None, description="与列表一致的状态过滤"),
+) -> dict[str, Any]:
+    """导出口径与列表一致：已终止的合同不会算进在履约，total 与 items 条数保持对齐。"""
+    items, total = service.list_entries(keyword=keyword, status=status, page=1, size=10000)
+    return {
+        "module": "contract",
+        "total": total,
+        "summary": service.status_summary(items),
+        "items": items,
+    }
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -50,16 +65,9 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条运维合同执行确认签订、开始履行、终止合同；不允许的动作会被拦下并说明原因。"""
+    """对单条运维合同执行确认签订、开始履行、办理续签、终止合同；不允许的动作会被拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出运维合同清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "contract", "total": total, "items": items}
